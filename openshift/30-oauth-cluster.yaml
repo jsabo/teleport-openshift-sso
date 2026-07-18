@@ -1,0 +1,39 @@
+# Template — rendered by scripts/render.sh (KC_ROUTE_HOST from demo.env).
+#
+# Adds Keycloak as an OpenID Connect identity provider on the cluster OAuth
+# server. Prerequisites (created by walkthrough step 5, in openshift-config):
+#   - Secret    keycloak-teleport-client-secret  (the OIDC client secret)
+#   - ConfigMap keycloak-teleport-ca             (CA that signed the Keycloak route cert)
+#
+# The `name` field is part of the OAuth callback URL
+# (https://<oauth-host>/oauth2callback/keycloak-teleport) and must match the
+# redirect URI registered on the Keycloak client exactly.
+#
+# `claims.groups` maps the token's `groups` claim (the user's Teleport roles)
+# to OpenShift Groups: memberships are re-synced on every login, and groups
+# created this way are annotated oauth.openshift.io/idp.keycloak-teleport.
+apiVersion: config.openshift.io/v1
+kind: OAuth
+metadata:
+  name: cluster
+spec:
+  identityProviders:
+    - name: keycloak-teleport
+      mappingMethod: claim
+      type: OpenID
+      openID:
+        clientID: openshift
+        clientSecret:
+          name: keycloak-teleport-client-secret
+        ca:
+          name: keycloak-teleport-ca
+        issuer: https://${KC_ROUTE_HOST}/realms/teleport
+        claims:
+          preferredUsername:
+            - preferred_username
+          name:
+            - name
+          email:
+            - email
+          groups:
+            - groups

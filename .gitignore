@@ -1,0 +1,9 @@
+# Local configuration with secrets — copy demo.env.example to demo.env and fill in
+demo.env
+
+# Rendered manifests (contain the client secret and SAML cert)
+rendered/
+
+# Exported certificates
+*.pem
+ingress-ca.crt

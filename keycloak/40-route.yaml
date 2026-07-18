@@ -1,0 +1,22 @@
+# Template — rendered by scripts/render.sh (KC_ROUTE_HOST from demo.env).
+#
+# Edge termination: the router presents the cluster's default ingress
+# certificate for this host and forwards plain HTTP to the pod. That keeps
+# certificate trust simple — OpenShift's OAuth server only needs to trust the
+# ingress CA, which the walkthrough extracts from
+# openshift-config-managed/default-ingress-cert.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: keycloak
+  namespace: keycloak
+spec:
+  host: ${KC_ROUTE_HOST}
+  to:
+    kind: Service
+    name: keycloak
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

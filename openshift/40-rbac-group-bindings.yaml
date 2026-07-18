@@ -1,0 +1,48 @@
+# Tiered access: OpenShift group names ARE Teleport role names (the groups
+# claim passes Teleport roles through unchanged). To add a tier, add a
+# ClusterRoleBinding whose Group name matches the Teleport role — no Keycloak
+# or Teleport changes needed.
+#
+#   Teleport role   OpenShift ClusterRole
+#   -------------   ---------------------
+#   full-access  →  cluster-admin (everything)
+#   editor       →  edit          (modify most objects, no RBAC/quota changes)
+#   access       →  view          (read-only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: teleport-sso-full-access
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: full-access
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: teleport-sso-editor
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: edit
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: editor
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: teleport-sso-access
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: access

@@ -1,0 +1,68 @@
+# Template — rendered by scripts/render.sh (KC_ROUTE_HOST from demo.env).
+#
+# Runs Keycloak in dev mode with an ephemeral file database and imports the
+# `teleport` realm from the ConfigMap on every start. Dev mode is deliberate:
+# this is a demo bridge with fully declarative config (the realm JSON), so a
+# database would only add moving parts. If the pod restarts, the realm is
+# re-imported and users are simply re-created on their next login.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    app: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.7.0
+          args: ["start-dev", "--import-realm"]
+          env:
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              value: admin
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-admin
+                  key: password
+            # The public URL Keycloak advertises (OIDC issuer). Must match the
+            # Route host — and the issuer in OpenShift's OAuth CR — exactly.
+            - name: KC_HOSTNAME
+              value: "https://${KC_ROUTE_HOST}"
+            # TLS terminates at the OpenShift router (edge Route); Keycloak
+            # itself serves plain HTTP and trusts X-Forwarded-* from the router.
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+          readinessProbe:
+            httpGet:
+              path: /realms/teleport
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: realm-import
+          configMap:
+            name: keycloak-realm-teleport
