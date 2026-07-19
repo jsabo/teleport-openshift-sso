@@ -50,6 +50,35 @@ flowchart LR
   router→pod traffic is in-cluster HTTP. Use a `reencrypt` Route with a
   service-serving certificate if in-cluster plaintext is out of policy.
 
+## Federation terminology
+
+SAML and OIDC are both **identity-federation** protocols: one party (the
+identity provider) asserts who a user is, the other accepts that assertion
+instead of holding its own credentials. The protocol never determines
+direction — the *role* does:
+
+| | Asserting side | Consuming side | Artifact |
+|---|---|---|---|
+| **SAML** | Identity Provider (IdP) | Service Provider (SP) | signed XML assertion |
+| **OIDC** | OpenID Provider (OP) | Relying Party (RP) | signed ID token (JWT, on OAuth 2.0) |
+
+Teleport uses the same protocols in both directions with opposite roles: an
+**auth connector** (`kind: saml`/`oidc`) makes Teleport the *consuming* side
+(SP/RP) of your corporate IdP, while a **SAML application**
+(`saml_idp_service_provider`) makes Teleport the *asserting* side (IdP) for
+the registered app. A system doing both at once is an **identity broker** —
+which describes both Teleport here and Keycloak. The full chain, with
+alternating roles:
+
+```
+Corporate IdP ──SAML/OIDC──► Teleport ──SAML──► Keycloak ──OIDC──► OpenShift
+IdP                          SP → IdP           SP → OP            RP
+```
+
+(Pedantry that matters in review: OAuth 2.0 alone is authorization, not
+authentication — OIDC is the identity layer on top, so OpenShift's OAuth
+server acts as an *OIDC relying party* toward Keycloak.)
+
 ## Where the identity comes from
 
 ```mermaid
