@@ -93,7 +93,7 @@ repo asserts mail = `user.metadata.name`).
 8. **Three sessions** (OpenShift, Keycloak, Teleport web). Console logout only
    ends the first; Keycloak silently re-issues tokens from its own session
    without re-running SAML, so **Teleport role changes don't propagate until
-   the Keycloak session ends**. Demo JIT elevation in a fresh private window.
+   the Keycloak session ends**. Exercise JIT elevation in a fresh private window.
 
 9. **envsubst must get an explicit variable list** (`envsubst "$VARS"`) when
    rendering the realm JSON — otherwise it destroys Keycloak's own `${...}`
@@ -104,18 +104,52 @@ repo asserts mail = `user.metadata.name`).
     on Keycloak 26.7.0). The `groups` claim path needs no per-role Keycloak
     config — any Teleport role flows through, which is what makes JIT work.
 
+11. **Keycloak's native realm-import `${VAR}` env substitution works on 26.7.0**
+    (confirmed live: SAML descriptor entityID fully resolved). This is what
+    keeps the OIDC client secret in a k8s Secret instead of the realm
+    ConfigMap. Syntax is `${VAR}` — NOT `$(env:VAR)`, which belongs to the
+    third-party keycloak-config-cli tool. The deployment's `KC_HOSTNAME` uses
+    Kubernetes dependent-env expansion (`https://$(KC_ROUTE_HOST)`), which
+    requires KC_ROUTE_HOST to be defined EARLIER in the same env array.
+
+12. **Keycloak starts fine with no bootstrap admin** (omit `KC_BOOTSTRAP_ADMIN_*`
+    entirely; confirmed on 26.7.0). The /admin console simply has no account.
+    Temporary recovery when needed:
+    `oc exec -it deployment/keycloak -n keycloak -- /opt/keycloak/bin/kc.sh bootstrap-admin user`
+    (evaporates on restart — storage is ephemeral).
+
+13. **Ephemeral Keycloak makes OIDC `sub` unstable** — it's the internal user
+    UUID, re-minted on first login after every pod restart. OpenShift names
+    identities `<idp>:<sub>` and the default `mappingMethod: claim` refuses to
+    attach a new identity to an existing User ("Could not create user." at the
+    callback). The OAuth CR must use `mappingMethod: add`. With a persistent
+    KC database, subs are stable and `claim` works.
+
+14. **The one secret that cannot be eliminated**: OpenShift's OAuth `OpenID`
+    identity provider requires `clientSecret` — no PKCE, private_key_jwt,
+    mTLS, or SPIFFE alternative exists (the 4.20+ external-OIDC mode still
+    needs a console client secret). Minimized instead: generated in-memory by
+    scripts/rotate-client-secret.sh, stored only in two k8s Secrets, never on
+    disk or in a ConfigMap.
+
 ## Operational notes
 
-- Keycloak runs `start-dev --import-realm`, single replica, no DB. The realm
-  ConfigMap is the entire config; restarts wipe local users/sessions and
-  re-import. Config changes = edit `keycloak/realm-teleport.json` →
-  `scripts/render.sh` → apply ConfigMap → `oc rollout restart deployment/keycloak
-  -n keycloak`.
-- `demo.env`, `rendered/`, `ingress-ca.crt` are gitignored (secrets). The live
-  deployment's values exist only in the operator's local `demo.env`.
+- Keycloak runs `start-dev --import-realm`, single replica, no DB, **no admin
+  account**. The realm ConfigMap (placeholders only) + env-injected
+  Secrets/ConfigMaps are the entire config; restarts wipe local users/sessions
+  and re-import. Realm changes = edit `keycloak/realm-teleport.json` →
+  `oc create configmap keycloak-realm-teleport --from-file=... --dry-run=client -o yaml | oc apply -f -`
+  → `oc rollout restart deployment/keycloak -n keycloak`.
+- Credential posture: exactly ONE secret exists (the OIDC client secret), in
+  two k8s Secrets, managed by `scripts/rotate-client-secret.sh` (create +
+  rotate; value never touches disk). The SAML signing cert (public) lives in
+  the `teleport-saml-cert` ConfigMap via `scripts/sync-saml-cert.sh`
+  (idempotent; restarts KC only on change). `demo.env` holds hostnames only.
+- `demo.env`, `rendered/`, `ingress-ca.crt` are gitignored (hygiene — none of
+  them contain secrets anymore).
 - `scripts/verify.sh` checks the full chain and is safe at any deployment stage.
-- OpenShift group names are raw Teleport role names by design (legible
-  just-in-time access demos). On a shared cluster, check for collisions with
+- OpenShift group names are raw Teleport role names by design (the group
+  visibly IS the Teleport role). On a shared cluster, check for collisions with
   pre-existing Group bindings before applying
   `openshift/40-rbac-group-bindings.yaml`, or prefix the group names (see the
   README's Day-2 section).

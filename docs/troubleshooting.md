@@ -46,8 +46,9 @@ live session and silently issues a fresh token **without going back to
 Teleport** — meaning your `teleport_roles` attribute (and therefore your
 OpenShift groups) are *not* refreshed.
 
-This matters for the just-in-time demo: to see a newly-granted Teleport role
-appear, the Keycloak session must end so the SAML exchange re-runs. Easiest:
+This matters when validating just-in-time access: to see a newly-granted
+Teleport role appear, the Keycloak session must end so the SAML exchange
+re-runs. Easiest:
 do console logins in a private window and close it between logins.
 Alternatives: log out of the Keycloak account console too, or delete the
 session in the Keycloak admin console (Sessions → sign out), or set the
@@ -102,6 +103,23 @@ set the username from the SAML `uid` attribute. A follow-on symptom of this
 failure is `Code not valid` on retries — the browser re-submits an
 authorization code that was already consumed by the first, failed attempt.
 
+## "Could not create user." at the OAuth callback
+
+OpenShift names identities `<idp-name>:<sub>`, and Keycloak's `sub` claim is
+its internal user UUID. With ephemeral Keycloak storage, that UUID is minted
+fresh the first time you log in after any Keycloak restart — so a returning
+user presents a *new* identity for an *existing* User object. The OAuth CR
+must use `mappingMethod: add` (as shipped), which attaches the new identity to
+the existing username. The default `claim` refuses and fails with exactly this
+error.
+
+If you hit this, your OAuth CR was applied with `mappingMethod: claim` — fix
+the field (or re-apply `rendered/openshift/30-oauth-cluster.yaml`) and retry.
+Orphaned identities from before a Keycloak restart are harmless; clean them
+with `oc get identities` / `oc delete identity <name>` if you like. With a
+persistent Keycloak database (README → Production notes) subs are stable and
+`claim` becomes usable.
+
 ## Groups didn't appear / didn't update
 
 1. Confirm the roles reached Keycloak: admin console → teleport realm → Users
@@ -115,21 +133,79 @@ authorization code that was already consumed by the first, failed attempt.
 3. Remember group *names* are Teleport role names — a typo in a
    ClusterRoleBinding's Group subject silently grants nothing.
 
+## A literal `${KC_ROUTE_HOST}` (or other placeholder) appears in Keycloak's output
+
+The realm JSON's `${VAR}` placeholders are resolved by **Keycloak itself** at
+realm-import time from the pod's environment (this is documented Keycloak
+behavior for realm import — note the syntax is `${VAR}`, not the
+`$(env:VAR)` form used by the third-party keycloak-config-cli tool). If a
+placeholder survives into the SAML descriptor, the discovery document, or an
+error page:
+
+1. Check the env actually reached the pod:
+   `oc exec deployment/keycloak -n keycloak -- printenv | grep -E 'KC_ROUTE_HOST|OIDC_CLIENT'`.
+   Missing values usually mean the `keycloak-sso-config` ConfigMap or
+   `keycloak-oidc-client` Secret wasn't created before the pod started —
+   create them and restart.
+2. Confirm your image is Keycloak 26.x — env substitution in file-based realm
+   import was inconsistent in much older releases.
+3. Delete and recreate the realm ConfigMap if you rendered an old copy of the
+   JSON into it — the import file must contain the literal placeholders.
+
+Quick end-to-end check after any fix:
+`curl -sk https://<KC_ROUTE_HOST>/realms/teleport/protocol/saml/descriptor | grep entityID`.
+
+## Login fails once right after rotating the client secret
+
+`scripts/rotate-client-secret.sh` restarts Keycloak; a login attempted during
+the ~30-second restart window fails and succeeds on retry. The OpenShift OAuth
+server reloads its Secret automatically — no action needed on that side.
+
+## "I need the Keycloak admin console"
+
+There is no admin account by design (nothing to steal, nothing to rotate).
+For rare debugging, mint a temporary one inside the pod — it evaporates on the
+next restart because storage is ephemeral:
+
+```bash
+oc exec -it deployment/keycloak -n keycloak -- /opt/keycloak/bin/kc.sh bootstrap-admin user
+```
+
 ## Keycloak pod won't become Ready
 
 - `oc logs deployment/keycloak -n keycloak` — realm-import JSON errors are
   reported at startup with the offending line.
-- A malformed `TELEPORT_SAML_CERT_B64` (stray newline, PEM header included)
-  fails at import or at first SAML validation. It must be one bare base64 line.
+- A malformed certificate value in the `teleport-saml-cert` ConfigMap (stray
+  newline, PEM header included) fails at import or at first SAML validation.
+  It must be one bare base64 line — `scripts/sync-saml-cert.sh` guarantees
+  this; suspect manual edits.
 
 ## SAML response rejected by Keycloak
 
-- "Invalid signature": the signing certificate doesn't match — re-export it
-  (README Step 2), re-render, re-apply the ConfigMap, restart Keycloak. This
-  happens after a Teleport CA rotation.
+- "Invalid signature": the signing certificate doesn't match — run
+  `scripts/sync-saml-cert.sh` (it re-exports, updates the ConfigMap, and
+  restarts Keycloak only on change). This happens after a Teleport CA
+  rotation.
 - Clock skew: SAML assertions are valid for a narrow window. Cluster nodes use
   chrony/NTP by default; check node time if you see NotBefore/NotOnOrAfter
   errors in Keycloak's log.
+
+## `invalid entity descriptor ... EOF` when re-applying the Teleport service provider
+
+The initial `tctl create` works from the minimal spec (entity_id + acs_url) —
+Teleport synthesizes the full SAML entity descriptor and stores it on the
+resource. Re-applying the same minimal file over the existing resource fails
+with this error. To update an existing provider, round-trip it:
+
+```bash
+tctl get saml_idp_service_provider/openshift-keycloak > sp.yaml
+# edit sp.yaml (it includes the stored entity_descriptor — leave that intact)
+tctl create --force -f sp.yaml
+```
+
+Also beware: the exported YAML spells out every field, so if you paste new
+fields in, check you're not duplicating a key that already exists later in the
+file (YAML silently keeps the last occurrence).
 
 ## Rollout after changing the OAuth CR seems stuck
 
