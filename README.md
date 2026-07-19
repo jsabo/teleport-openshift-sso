@@ -61,38 +61,44 @@ Jargon decoder (one-liners):
 ## App access or identity federation?
 
 Teleport offers two fundamentally different ways to put an application behind
-your Teleport identity, and this repo uses the less-obvious one. Understanding
-the difference tells you which pattern fits any given app — and why both can
-show up as tiles in Teleport's resource catalog for the same application.
+your Teleport identity, and this repo uses the less-obvious one:
 
-**App access proxies the traffic.** Teleport acts as an authenticated reverse
-proxy: the browser talks to a Teleport-issued address, Teleport checks its own
-front door (your session, roles, MFA), then forwards the HTTP traffic to the
-app. Teleport sits *in the data path*, which is what buys you a Teleport-side
-audit of the app session (HTTP request logging) and reach into apps that
-aren't exposed publicly. What it does **not** do is log you into the app: the
-app behind the proxy still has its own front door. App access can only pass
-your identity through that door when the app accepts an injected identity —
-in practice a JWT header (Grafana's `auth.jwt` is the canonical example).
+```mermaid
+flowchart TB
+    subgraph fed["Identity federation — what this repo builds"]
+        direction LR
+        B1[Browser] <--> APP1["App (console)<br/>own login, own RBAC,<br/>own audit log"]
+        APP1 -. "who is this?<br/>(at login only)" .-> T1["Teleport<br/>identity provider"]
+    end
+    subgraph acc["App access — Teleport as a proxy"]
+        direction LR
+        B2[Browser] <--> P["Teleport proxy<br/>audits the HTTP session"] <--> APP2["App<br/>still has its own login"]
+    end
+```
+
+**App access proxies the traffic.** Teleport checks its own front door (your
+session, roles, MFA), then forwards the HTTP traffic. Being *in the data path*
+buys a Teleport-side audit of the app session and reach into apps that aren't
+exposed publicly. What it does **not** do is log you into the app — that only
+works when the app accepts an injected identity, in practice a JWT header
+(Grafana's `auth.jwt` is the canonical example). The console accepts none.
 
 **Identity federation makes Teleport the app's identity provider.** Nothing is
 proxied — the app keeps its own front door and is taught to *ask Teleport who
-you are* (here: via Keycloak translating the console's OIDC to Teleport's
-SAML). Teleport is not in the data path at all; it's the authority that
-vouches for you at login. The payoff is that your identity lands **inside the
-app's own authorization model**: OpenShift mints a real User, syncs your
-Teleport roles as Groups, its native RBAC takes over, and its audit logs
-attribute every action to the real person. It also covers non-browser entry
-points (`oc login --web`) that a proxy never sees.
+you are* (here via Keycloak, translating the console's OIDC to Teleport's
+SAML). The payoff is that your identity lands **inside the app's own
+authorization model**: OpenShift mints a real User, syncs your Teleport roles
+as Groups, native RBAC takes over, and the cluster's audit log attributes
+every action to the real person. It also covers entry points a proxy never
+sees, like `oc login --web`.
 
-The audit trade is worth stating precisely. With federation, Teleport records
-the *authentication* (the SAML IdP login event) but none of the app usage —
-usage auditing moves into the app's own logs, where it gains real usernames.
-With app access, Teleport records the HTTP session but the app may not know
-who you are at all. The JWT pattern is the best of both worlds when the app
-supports it; for Kubernetes specifically, remember that CLI access through a
-Teleport kube agent is fully session-recorded by Teleport regardless of how
-console SSO is done — the two paths complement each other.
+The audit trade, stated precisely: with federation, Teleport records the
+*login* and the app's logs record the *usage* — now with real usernames. With
+app access, Teleport records the HTTP session but the app may not know who
+you are at all. The JWT pattern is both at once, when the app supports it.
+And for Kubernetes specifically, CLI access through a Teleport kube agent
+stays fully session-recorded by Teleport regardless of how console SSO is
+done — the two paths complement each other.
 
 | App supports | Use | Login identity | Usage audit lives in |
 |---|---|---|---|
@@ -144,9 +150,10 @@ sequenceDiagram
 
 In words:
 
-1. The console hands you to the cluster's OAuth server, which lists its
-   identity providers (`kube:admin` plus `keycloak-teleport`, until you remove
-   kubeadmin).
+1. The console hands you to the cluster's OAuth server. While kubeadmin
+   exists you see a two-button picker (`kube:admin` / `keycloak-teleport`);
+   once it's removed (Step 10), OpenShift auto-redirects through its only
+   identity provider and no login page appears at all.
 2. Picking `keycloak-teleport` starts a standard OIDC authorization-code flow
    against Keycloak. Keycloak has no users or login page of its own — it
    immediately forwards the browser to Teleport as a SAML request.
@@ -172,38 +179,38 @@ Teleport flow through on the next full login.
 ### Where the identity comes from
 
 If your users reach Teleport through a corporate identity provider (Okta,
-Entra ID, Google, GitHub — or passkeys), it's worth being precise about whose
-identity OpenShift actually receives, because Teleport plays **both SAML
-positions at once**:
+Entra ID, Google, GitHub — or passkeys), be precise about whose identity
+OpenShift actually receives, because Teleport plays **both SAML positions at
+once** — service provider to your IdP, identity provider to OpenShift:
 
-- **Upstream, Teleport is a service provider**: your corporate IdP
-  authenticates the human — password, MFA, its own device policies — and
-  asserts them to Teleport once, at login.
-- Teleport then **mints its own identity** from that assertion: the SSO
-  connector's attribute mapping converts IdP groups into *Teleport roles*, IdP
-  attributes become *traits*, and Teleport issues its own short-lived session.
-  From here the living identity is Teleport's — it can gain a role through an
-  Access Request, lose one, or be locked, all without the corporate IdP
-  knowing.
-- **Downstream, Teleport is the identity provider**: when the console flow
-  arrives, Teleport answers from that session — it does *not* bounce you back
-  to the corporate IdP. The SAML assertion carries your Teleport username and
-  your Teleport roles **as they are at that moment**, including just-in-time
-  grants your upstream IdP has never heard of.
+```mermaid
+flowchart LR
+    I["Corporate IdP<br/>(Okta / Entra / GitHub)"]
+    T["Teleport<br/>roles + traits<br/>MFA · Device Trust · JIT · locks"]
+    A["OpenShift<br/>User + Groups + RBAC"]
+    I -->|"proves WHO you are<br/>once, at Teleport login"| T
+    T -->|"asserts WHAT you are<br/>current roles, every app login"| A
+```
 
-The chain reads: *your IdP proves who you are → Teleport decides what you are
-→ OpenShift consumes Teleport's decision.* Two practical consequences:
+Your corporate IdP authenticates the human once, at Teleport's door. Teleport
+then **mints its own identity** from that assertion — the SSO connector maps
+IdP groups to *Teleport roles*, attributes become *traits* — and from that
+moment the living identity is Teleport's: it can gain a role through an
+Access Request, lose one, or be locked, all without the corporate IdP
+knowing. When the console flow arrives, Teleport answers from its own session
+(it does *not* bounce you back to the IdP), asserting your roles **as they
+are at that moment** — including just-in-time grants your upstream IdP has
+never heard of.
+
+Two practical consequences:
 
 1. **Policy consolidation** — whatever Teleport enforces at its own door
    (per-session MFA, hardware keys, Device Trust) automatically gates every
-   application behind its IdP, including this console, with zero
-   OpenShift-side configuration.
-2. **Revocation flows down with a lag per layer** — disabling a user upstream
-   stops *new* Teleport sessions but not existing ones; a **Teleport lock**
-   kills the Teleport layer immediately, and with it every future SAML
-   assertion. Below that, the Keycloak and OpenShift session TTLs are the
-   remaining lag (see the
-   [session model](docs/architecture.md#session-model)).
+   application behind its IdP, with zero OpenShift-side configuration.
+2. **Revocation flows down one layer at a time** — a Teleport lock stops all
+   future SAML assertions immediately; the sessions below it age out on their
+   own TTLs. Details in the
+   [session model](docs/architecture.md#session-model).
 
 One operational nuance for SSO-backed users: Teleport recomputes their role
 *list* from the connector's attribute mapping on every corporate-IdP login.
@@ -211,7 +218,7 @@ Grant durable access through roles the connector maps (or via Access Lists,
 or by extending a role they already hold) — a one-off `tctl users update` on
 an SSO user is silently undone at their next login.
 
-### What you end up with
+## What you end up with
 
 - Keycloak runs **inside the OpenShift cluster** as a single small pod. Its
   entire configuration is one JSON file in this repo — no database, nothing to
