@@ -1,10 +1,23 @@
-# Template — rendered by scripts/render.sh (KC_ROUTE_HOST from demo.env).
+# Static manifest — no rendering needed.
 #
 # Runs Keycloak in dev mode with an ephemeral file database and imports the
 # `teleport` realm from the ConfigMap on every start. Dev mode is deliberate:
-# this is a demo bridge with fully declarative config (the realm JSON), so a
-# database would only add moving parts. If the pod restarts, the realm is
-# re-imported and users are simply re-created on their next login.
+# the configuration is fully declarative (the realm JSON), so a database would
+# only add moving parts here. If the pod restarts, the realm is re-imported
+# and users are simply re-created on their next login. For the persistent/HA
+# variant, see the README's Production notes.
+#
+# Credential design:
+# - There is NO Keycloak admin account. The realm is fully declarative, so the
+#   bootstrap admin (KC_BOOTSTRAP_ADMIN_*) is simply never created — the
+#   /admin console has no account to log into. See the README's Day-2 section
+#   for the one-off recovery procedure if you ever need one.
+# - The realm JSON contains ${VAR} placeholders that KEYCLOAK ITSELF resolves
+#   from this pod's environment at import time. That keeps the OIDC client
+#   secret in a k8s Secret (keycloak-oidc-client) — never in a ConfigMap.
+# - Hostnames come from the keycloak-sso-config ConfigMap; the Teleport SAML
+#   signing certificate (public key material) from the teleport-saml-cert
+#   ConfigMap maintained by scripts/sync-saml-cert.sh.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,17 +40,37 @@ spec:
           image: quay.io/keycloak/keycloak:26.7.0
           args: ["start-dev", "--import-realm"]
           env:
-            - name: KC_BOOTSTRAP_ADMIN_USERNAME
-              value: admin
-            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+            - name: KC_ROUTE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: keycloak-sso-config
+                  key: KC_ROUTE_HOST
+            - name: OAUTH_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: keycloak-sso-config
+                  key: OAUTH_HOST
+            - name: TELEPORT_PROXY
+              valueFrom:
+                configMapKeyRef:
+                  name: keycloak-sso-config
+                  key: TELEPORT_PROXY
+            - name: OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: keycloak-admin
-                  key: password
+                  name: keycloak-oidc-client
+                  key: clientSecret
+            - name: TELEPORT_SAML_CERT_B64
+              valueFrom:
+                configMapKeyRef:
+                  name: teleport-saml-cert
+                  key: TELEPORT_SAML_CERT_B64
             # The public URL Keycloak advertises (OIDC issuer). Must match the
             # Route host — and the issuer in OpenShift's OAuth CR — exactly.
+            # $(KC_ROUTE_HOST) is Kubernetes dependent-env expansion; it works
+            # because KC_ROUTE_HOST is defined earlier in this env list.
             - name: KC_HOSTNAME
-              value: "https://${KC_ROUTE_HOST}"
+              value: "https://$(KC_ROUTE_HOST)"
             # TLS terminates at the OpenShift router (edge Route); Keycloak
             # itself serves plain HTTP and trusts X-Forwarded-* from the router.
             - name: KC_HTTP_ENABLED

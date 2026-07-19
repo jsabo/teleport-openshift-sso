@@ -19,7 +19,14 @@ metadata:
 spec:
   identityProviders:
     - name: keycloak-teleport
-      mappingMethod: claim
+      # `add`, not the default `claim`: OpenShift names identities by the OIDC
+      # `sub`, which is Keycloak's internal user UUID — and with ephemeral
+      # Keycloak storage that UUID changes on every pod restart. `claim` would
+      # then refuse to attach the new identity to the existing user ("Could
+      # not create user"); `add` attaches it. If you run Keycloak with a
+      # persistent database (see the README's Production notes), subs are
+      # stable and you can use the stricter `claim`.
+      mappingMethod: add
       type: OpenID
       openID:
         clientID: openshift

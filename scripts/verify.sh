@@ -50,6 +50,16 @@ if command -v oc >/dev/null && oc whoami >/dev/null 2>&1; then
     if oc get ns keycloak >/dev/null 2>&1; then
         ready="$(oc get deploy keycloak -n keycloak -o jsonpath='{.status.readyReplicas}' 2>/dev/null)"
         [[ "${ready}" == "1" ]] && ok "keycloak pod ready" || bad "keycloak pod not ready"
+        # Credential posture: the realm ConfigMap must hold the ${VAR}
+        # placeholder, never the actual client secret.
+        realm_cm="$(oc get configmap keycloak-realm-teleport -n keycloak -o jsonpath='{.data.realm-teleport\.json}' 2>/dev/null)"
+        if [[ -z "${realm_cm}" ]]; then
+            skip "realm ConfigMap not created yet"
+        elif grep -qF '${OIDC_CLIENT_SECRET}' <<<"${realm_cm}"; then
+            ok "realm ConfigMap holds the \${OIDC_CLIENT_SECRET} placeholder (no secret material)"
+        else
+            bad "realm ConfigMap does NOT hold the placeholder — a literal secret may be embedded"
+        fi
     else
         skip "keycloak namespace not created yet"
     fi

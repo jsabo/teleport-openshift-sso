@@ -1,0 +1,12 @@
+# Template — rendered by scripts/render.sh (hostnames from demo.env).
+# Non-secret instance configuration consumed by the Keycloak pod's env, and
+# resolved by Keycloak itself inside the realm-import JSON (${VAR} syntax).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-sso-config
+  namespace: keycloak
+data:
+  KC_ROUTE_HOST: "${KC_ROUTE_HOST}"
+  OAUTH_HOST: "${OAUTH_HOST}"
+  TELEPORT_PROXY: "${TELEPORT_PROXY}"

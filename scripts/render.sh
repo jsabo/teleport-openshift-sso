@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Renders every template into rendered/ using the values from demo.env.
-# Idempotent — run it again after changing demo.env.
+# Renders the hostname-bearing templates into rendered/ using demo.env.
+# demo.env contains NO secrets — only hostnames. The OIDC client secret is
+# handled by scripts/rotate-client-secret.sh (straight into k8s Secrets) and
+# the Teleport SAML certificate by scripts/sync-saml-cert.sh; Keycloak itself
+# resolves both into the realm at import time via ${VAR} env substitution.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,7 +19,7 @@ set -a
 source demo.env
 set +a
 
-for var in KC_ROUTE_HOST OAUTH_HOST TELEPORT_PROXY OIDC_CLIENT_SECRET KC_ADMIN_PASSWORD TELEPORT_SAML_CERT_B64; do
+for var in KC_ROUTE_HOST OAUTH_HOST CONSOLE_HOST TELEPORT_PROXY; do
     if [[ -z "${!var:-}" ]]; then
         echo "error: ${var} is empty — set it in demo.env" >&2
         exit 1
@@ -28,16 +31,14 @@ if ! command -v envsubst >/dev/null; then
     exit 1
 fi
 
-# Only substitute OUR variables. The realm JSON contains Keycloak's own
-# ${ATTRIBUTE...} templates, which must survive rendering untouched.
-VARS='$KC_ROUTE_HOST $OAUTH_HOST $TELEPORT_PROXY $OIDC_CLIENT_SECRET $KC_ADMIN_PASSWORD $TELEPORT_SAML_CERT_B64'
+# Only substitute OUR variables — the realm JSON is NOT rendered at all (its
+# ${VAR} placeholders are resolved by Keycloak from the pod environment).
+VARS='$KC_ROUTE_HOST $OAUTH_HOST $CONSOLE_HOST $TELEPORT_PROXY'
 
 rm -rf rendered
 mkdir -p rendered/keycloak rendered/teleport rendered/openshift
 
-# Templated manifests
-for f in keycloak/05-admin-secret.yaml \
-         keycloak/20-deployment.yaml \
+for f in keycloak/10-sso-config.yaml \
          keycloak/40-route.yaml \
          teleport/saml-idp-service-provider.yaml \
          openshift/30-oauth-cluster.yaml; do
@@ -45,24 +46,8 @@ for f in keycloak/05-admin-secret.yaml \
 done
 
 # Static manifests, copied so `oc apply -f rendered/keycloak/` gets everything
-cp keycloak/00-namespace.yaml keycloak/30-service.yaml rendered/keycloak/
+cp keycloak/00-namespace.yaml keycloak/20-deployment.yaml keycloak/30-service.yaml rendered/keycloak/
 cp openshift/40-rbac-group-bindings.yaml rendered/openshift/
 
-# Realm JSON → ConfigMap. Rendered JSON goes to its own directory (NOT
-# rendered/keycloak/ — `oc apply -f <dir>` would try to apply raw JSON as a
-# k8s resource).
-mkdir -p rendered/realm
-envsubst "${VARS}" < keycloak/realm-teleport.json > rendered/realm/realm-teleport.json
-
-OC="$(command -v oc || command -v kubectl || true)"
-if [[ -z "${OC}" ]]; then
-    echo "error: need oc (or kubectl) on PATH to generate the realm ConfigMap" >&2
-    exit 1
-fi
-"${OC}" create configmap keycloak-realm-teleport \
-    --namespace=keycloak \
-    --from-file=realm-teleport.json=rendered/realm/realm-teleport.json \
-    --dry-run=client -o yaml > rendered/keycloak/10-realm-configmap.yaml
-
-echo "rendered/ is ready:"
+echo "rendered/ is ready (hostnames only — no secrets involved):"
 find rendered -type f | sort
