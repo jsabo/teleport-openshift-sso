@@ -19,7 +19,7 @@
 kind: saml_idp_service_provider
 version: v1
 metadata:
-  name: openshift-keycloak
+  name: openshift-console
   labels:
     purpose: openshift-console-sso
 spec:

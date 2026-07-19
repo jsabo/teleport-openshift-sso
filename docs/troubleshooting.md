@@ -198,7 +198,7 @@ resource. Re-applying the same minimal file over the existing resource fails
 with this error. To update an existing provider, round-trip it:
 
 ```bash
-tctl get saml_idp_service_provider/openshift-keycloak > sp.yaml
+tctl get saml_idp_service_provider/openshift-console > sp.yaml
 # edit sp.yaml (it includes the stored entity_descriptor — leave that intact)
 tctl create --force -f sp.yaml
 ```

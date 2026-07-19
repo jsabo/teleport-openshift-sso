@@ -358,7 +358,7 @@ tctl idp saml test-attribute-mapping \
 tctl create -f rendered/teleport/saml-idp-service-provider.yaml
 ```
 
-> ✓ **Check:** `tctl get saml_idp_service_provider/openshift-keycloak` shows
+> ✓ **Check:** `tctl get saml_idp_service_provider/openshift-console` shows
 > the resource, and the test-attribute-mapping output includes your roles under
 > `eduPersonAffiliation`.
 
@@ -668,7 +668,7 @@ oc delete secret keycloak-teleport-client-secret -n openshift-config
 oc delete configmap keycloak-teleport-ca -n openshift-config
 
 # Deregister Keycloak from Teleport
-tctl rm saml_idp_service_provider/openshift-keycloak
+tctl rm saml_idp_service_provider/openshift-console
 ```
 
 ## Troubleshooting
