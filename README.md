@@ -262,6 +262,30 @@ oc exec -it deployment/keycloak -n keycloak -- /opt/keycloak/bin/kc.sh bootstrap
 
 **Health check.** `scripts/verify.sh`.
 
+## Auditing
+
+The two halves of the audit trail live in different systems, by design:
+
+**Logins — Teleport's audit log.** Every console login writes a
+`SAML IdP authentication` event ("User [x] successfully authenticated to SAML
+service provider [...]"), alongside the user's own SSO login and
+certificate-issued events. View them in the Teleport web UI under **Audit**,
+or query the audit API.
+
+**Usage — OpenShift's audit log.** What a user does *after* login is
+kube-apiserver traffic, attributed to their real username (that's the point
+of federation — no more anonymous shared admin). Pull the per-action trail
+with:
+
+```bash
+oc adm node-logs --role=master --path=kube-apiserver/audit.log | grep '"username":"<user>"'
+```
+
+**Kube/CLI access through a Teleport agent** (if you also run one) is the
+deepest trail: Teleport records every request as its own audit event —
+verb, path, response code, user — plus session recordings. Console SSO and
+Teleport kube access complement each other; they don't overlap.
+
 ## Production notes
 
 The shipped manifests favor the smallest footprint; adjust these when
